@@ -1,54 +1,166 @@
-在我的项目下并没有model文件夹或文件，需要新建吗？在哪个文件夹里新建
-
-Claude-3-Opus的机器人图片
-Claude-3-Opus
-
-Poe
-
-抱歉,我的错。在Android项目中,我们通常将数据模型类放在单独的model包下,以便更好地组织代码结构。但是这个包并不是默认创建的,需要我们手动添加。
-
-让我们在项目中新建model包和Task类:
-
-在Android Studio的项目视图中,打开app/src/main/java/com.example.automationtool文件夹。
-右键点击automationtool文件夹,选择"New -> Package",输入包名"model",点击"OK"。
-右键点击新创建的model文件夹,选择"New -> Kotlin Class/File",输入文件名"Task",选择"Class"作为文件类型,点击"OK"。
-在Task.kt文件中添加以下代码:
-kotlin
-复制
-package com.example.automationtool.model
-
-data class Task(
-    val id: String,
-    val title: String,
-    val description: String,
-    val createTime: Long,
-    val executeTime: Long,
-    val status: TaskStatus
-)
-
-enum class TaskStatus {
-    PENDING, RUNNING, COMPLETED, FAILED
-}
-现在,我们就在com.example.automationtool包下创建了一个新的model包,并在其中定义了Task数据类。你可以在其他代码文件中导入和使用这个类了。
-
-再次为之前的疏忽道歉。如果你在创建包或文件的过程中遇到任何问题,请随时告诉我。我会尽我所能提供帮助。
+我再给你几个文件，你帮我看看正确的url怎么写
 
 
+# cdkey/serializers.py
+
+from rest_framework import serializers
+from .models import CDKey
+from django.conf import settings
+from .constants import DURATION_CHOICES
+
+class CDKeySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CDKey
+        fields = ['id', 'cdkey', 'status', 'create_time', 'user', 'extract_time']
+
+class CDKeyGenerateSerializer(serializers.Serializer):
+    duration = serializers.ChoiceField(choices=DURATION_CHOICES)
+    count = serializers.IntegerField(min_value=1, max_value=100)
+
+    def save(self, user):
+        cdkeys = []
+        for _ in range(self.validated_data['count']):
+            cdkey = CDKey.generate_cdkey()
+            cdkeys.append(CDKey(cdkey=cdkey, duration=self.validated_data['duration'], user=user))
+        CDKey.objects.bulk_create(cdkeys)
+        return cdkeys
+
+class CDKeyExtractSerializer(serializers.Serializer):
+    cdkey = serializers.CharField(max_length=64)
+
+    def validate_cdkey(self, value):
+        try:
+            cdkey = CDKey.objects.get(cdkey=value)
+        except CDKey.DoesNotExist:
+            raise serializers.ValidationError('Invalid CDKey.')
+        if cdkey.status != CDKey.STATUS_UNUSED:
+            raise serializers.ValidationError('CDKey already used or expired.')
+        return cdkey
+
+    def save(self, user):
+        cdkey = self.validated_data['cdkey'] 
+        cdkey.status = CDKey.STATUS_USED
+        cdkey.extract_time = timezone.now()
+        cdkey.user = user
+        cdkey.save()
+        return cdkey
+
+class CDKeyVerifySerializer(serializers.Serializer):
+    cdkey = serializers.CharField(max_length=64)
+    device_id = serializers.CharField(max_length=255)
+    app_version = serializers.CharField(max_length=20)
+------------------------------------------------------------------------
+# cdkey/views.py
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .models import CDKey
+from user.permissions import IsAdmin, IsAgent
+from django.utils import timezone
+from .serializers import CDKeyVerifySerializer
+from django.utils import timezone
+from .serializers import CDKeySerializer, CDKeyGenerateSerializer, CDKeyExtractSerializer, CDKeyVerifySerializer
+
+class CDKeyExtractView(APIView):
+    def post(self, request):
+        serializer = CDKeyExtractSerializer(data=request.data)
+        if serializer.is_valid():
+            user = request.user
+            today = timezone.now().date()
+
+            # 检查每日配额
+            if user.cdkeys.filter(extract_time__date=today).count() >= user.day_quota:
+                return Response({'error': 'Daily quota exceeded.'}, status=status.HTTP_403_FORBIDDEN)
+
+            # 检查每月配额
+            if user.quota_updated_at.month != today.month:
+                user.month_quota = user.month_quota_limit
+                user.quota_updated_at = today
+                user.save()
+            if user.cdkeys.filter(extract_time__month=today.month).count() >= user.month_quota:
+                return Response({'error': 'Monthly quota exceeded.'}, status=status.HTTP_403_FORBIDDEN)
+
+            cdkey = serializer.save(user=user)
+            return Response(CDKeySerializer(cdkey).data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class CDKeyGenerateView(APIView):
+    permission_classes = [IsAdmin | IsAgent]
+
+    def post(self, request):
+        serializer = CDKeyGenerateSerializer(data=request.data)
+        if serializer.is_valid():
+            cdkeys = serializer.save(user=request.user)
+            return Response(CDKeySerializer(cdkeys, many=True).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class CDKeyExtractView(APIView):
+    def post(self, request):
+        serializer = CDKeyExtractSerializer(data=request.data)  
+        if serializer.is_valid():
+            cdkey = serializer.save(user=request.user)
+            return Response(CDKeySerializer(cdkey).data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class CDKeyQueryView(APIView):
+    def get(self, request):
+        cdkeys = request.user.cdkeys.all()
+        return Response(CDKeySerializer(cdkeys, many=True).data)
 
 
 
+class CDKeyVerifyView(APIView):
+    def post(self, request):
+        serializer = CDKeyVerifySerializer(data=request.data)
+        if serializer.is_valid():
+            cdkey = serializer.validated_data['cdkey']
+            device_id = serializer.validated_data['device_id']
+            app_version = serializer.validated_data['app_version']
 
+            # TODO: 验证请求签名
 
+            try:
+                cdkey = CDKey.objects.get(cdkey=cdkey)
+            except CDKey.DoesNotExist:
+                return Response({'status': 0, 'error': 'Invalid CDKey'}, status=status.HTTP_400_BAD_REQUEST)
 
+            if cdkey.status != 1:
+                return Response({'status': 0, 'error': 'Invalid CDKey'}, status=status.HTTP_400_BAD_REQUEST)
 
+            if cdkey.expire_time < timezone.now():
+                return Response({'status': 0, 'error': 'CDKey expired'}, status=status.HTTP_400_BAD_REQUEST)
 
+            # TODO: 验证device_id和app_version
 
+            # TODO: 记录CDKey使用情况
 
+            return Response({'status': 1, 'expire_time': cdkey.expire_time}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+-----------------------------------------------------------------------------------
+# cdkey/models.py
 
+from django.db import models
+from user.models import User
+from .constants import DURATION_CHOICES
 
+class CDKey(models.Model):
+    expire_time = models.DateTimeField()
+    STATUS_CHOICES = (
+        (1, '未使用'),
+        (2, '已使用'),
+        (3, '已过期'),
+    )
 
+    cdkey = models.CharField(max_length=64, unique=True)
+    duration = models.IntegerField(choices=DURATION_CHOICES)
+    create_time = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, related_name='cdkeys')
+    extract_time = models.DateTimeField(null=True, blank=True)
+    status = models.SmallIntegerField(choices=STATUS_CHOICES, default=1)
 
-
+    class Meta:
+        db_table = 'cdkey'
 
 
 

@@ -1,3 +1,4 @@
+// build.gradle.kts
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
@@ -70,4 +71,16 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.zxing:core:3.5.1")
     implementation(libs.androidx.compose.material3)
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-process:2.6.1")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.compose.material:material-icons-extended:1.6.7")
+    implementation ("androidx.compose.runtime:runtime-livedata:1.6.7")
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("androidx.compose.ui:ui:1.2.0")
+    implementation("androidx.compose.material3:material3:1.0.0-alpha11")
 }
+
