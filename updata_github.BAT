@@ -1,4 +1,4 @@
 git pull origin master
 git add .
-git commit -m "automationtool"
+git commit -m "automation"
 git push origin master
