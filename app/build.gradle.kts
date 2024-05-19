@@ -2,7 +2,10 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
+    kotlin("plugin.serialization") version "1.8.10"
 }
+
+val ktorVersion = "2.2.4" // 在这里定义 ktorVersion 变量
 
 android {
     namespace = "com.automation.automationtool"
@@ -50,6 +53,8 @@ android {
     }
 }
 
+
+
 dependencies {
 
     implementation(libs.androidx.core.ktx)
@@ -79,8 +84,19 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
-    implementation("androidx.compose.ui:ui:1.2.0")
-    implementation("androidx.compose.material3:material3:1.0.0-alpha11")
+    implementation("androidx.compose.ui:ui:1.5.4")
+    implementation("androidx.compose.material3:material3:1.2.0-alpha02")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("io.ktor:ktor-client-android:$ktorVersion")
+    implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.0")
+    implementation("com.squareup.moshi:moshi-kotlin:1.14.0")
+    implementation("com.google.code.gson:gson:2.10.1")
+
+
+
 }
 

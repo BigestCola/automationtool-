@@ -1,4 +1,4 @@
-//MainActivity.kt
+// MainActivity.kt
 
 package com.automation.automationtool
 
@@ -11,29 +11,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
-import com.automation.automationtool.AuthManager
-import androidx.appcompat.app.AppCompatActivity
-
-
-
-class AuthManager(private val context: Context) {
-
-    fun checkAuthorizationStatus(callback: (Boolean) -> Unit) {
-        // 检查应用授权状态的逻辑
-        // ...
-        val isAuthorized = checkAuthorizationLogic()
-        callback(isAuthorized)
-    }
-
-    private fun checkAuthorizationLogic(): Boolean {
-        // 实现检查授权状态的逻辑
-        // ...
-        return true // 这里仅为示例,返回true表示已授权
-    }
-}
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
+import android.util.Log
 
 
 
@@ -49,30 +33,52 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
-    var showAuthDialog by remember { mutableStateOf(false) }
+    val authManager = AuthManager(context)
+    var isAuthorized by remember { mutableStateOf(false) }
+    var showAuthDialog by remember { mutableStateOf(true) }
 
-    Column {
-        AutomationButton(
-            text = "开始自动化服务",
-            onClick = {
-                AutomationService.start(context)
-                Toast.makeText(context, "自动化服务已启动", Toast.LENGTH_SHORT).show()
-            }
-        )
-        AutomationButton(
-            text = "停止自动化服务",
-            onClick = {
-                AutomationService.stop(context)
-                Toast.makeText(context, "自动化服务已停止", Toast.LENGTH_SHORT).show()
-            }
-        )
-        if (showAuthDialog) {
-            AuthorizationDialog(onDismissRequest = { showAuthDialog = false })
+    // 在应用程序启动时检查 CDKey 是否已经存储
+    LaunchedEffect(Unit) {
+        val storedCDKey = authManager.getCDKeyFromPreferences()
+        Log.d("MainScreen", "Stored CDKey: $storedCDKey")
+        if (!storedCDKey.isNullOrEmpty()) {
+            isAuthorized = true
+            showAuthDialog = false
         }
     }
 
-    CheckAuthorizationAndMaybeShowDialog(context) { authorized ->
-        showAuthDialog = !authorized
+    if (!isAuthorized) {
+        if (showAuthDialog) {
+            AuthorizationDialog(
+                onDismissRequest = { showAuthDialog = false },
+                onAuthorizationChecked = { authorized ->
+                    isAuthorized = authorized
+                    showAuthDialog = !authorized
+                }
+            )
+        } else {
+            // 如果用户关闭了对话框但未授权,则退出应用
+            LaunchedEffect(Unit) {
+                (context as? ComponentActivity)?.finish()
+            }
+        }
+    } else {
+        Column {
+            AutomationButton(
+                text = "开始自动化服务",
+                onClick = {
+                    AutomationService.start(context)
+                    Toast.makeText(context, "自动化服务已启动", Toast.LENGTH_SHORT).show()
+                }
+            )
+            AutomationButton(
+                text = "停止自动化服务",
+                onClick = {
+                    AutomationService.stop(context)
+                    Toast.makeText(context, "自动化服务已停止", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
     }
 }
 
@@ -94,22 +100,71 @@ fun CheckAuthorizationAndMaybeShowDialog(context: Context, onAuthorizationChecke
 }
 
 @Composable
-fun AuthorizationDialog(onDismissRequest: () -> Unit) {
+fun AuthorizationDialog(
+    onDismissRequest: () -> Unit,
+    onAuthorizationChecked: (Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    var cdKey by remember { mutableStateOf("") }
+    val authManager = AuthManager(context)
+    var isVerifying by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    var showErrorMessage by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("授权") },
-        text = { Text("应用需要授权才能继续使用") },
+        text = {
+            Column {
+                Text("应用需要授权才能继续使用")
+                TextField(
+                    value = cdKey,
+                    onValueChange = { cdKey = it },
+                    label = { Text("请输入CDKey") }
+                )
+            }
+        },
         confirmButton = {
-            Button(onClick = onDismissRequest) {
+            Button(
+                onClick = { isVerifying = true },
+                enabled = !isVerifying
+            ) {
                 Text("确认")
             }
         },
         dismissButton = {
-            Button(onClick = onDismissRequest) {
+            Button(
+                onClick = onDismissRequest,
+                enabled = !isVerifying
+            ) {
                 Text("取消")
             }
         }
     )
+
+    if (showErrorMessage) {
+        Text("CDKey 验证失败,请输入有效的 CDKey。")
+    }
+
+    LaunchedEffect(isVerifying) {
+        if (isVerifying) {
+            coroutineScope.launch {
+                authManager.authorizeCDKey(cdKey) { authorized ->
+                    if (authorized) {
+                        onAuthorizationChecked(true)
+                    } else {
+                        showErrorMessage = true
+                    }
+                    isVerifying = false
+                }
+            }
+        }
+    }
+}
+
+private fun saveCDKeyToPreferences(context: Context, cdKey: String) {
+    val sharedPreferences = context.getSharedPreferences("auth_prefs", Context.MODE_PRIVATE)
+    sharedPreferences.edit().putString("cd_key", cdKey).apply()
 }
 
 @Preview(showBackground = true)

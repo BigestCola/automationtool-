@@ -1,166 +1,149 @@
-我再给你几个文件，你帮我看看正确的url怎么写
+// AuthManager.kt
 
+package com.automation.automationtool
 
-# cdkey/serializers.py
+import android.content.Context
+import android.os.AsyncTask
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.Body
+import retrofit2.http.POST
+import java.io.IOException
 
-from rest_framework import serializers
-from .models import CDKey
-from django.conf import settings
-from .constants import DURATION_CHOICES
+class AuthManager(private val context: Context) {
 
-class CDKeySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CDKey
-        fields = ['id', 'cdkey', 'status', 'create_time', 'user', 'extract_time']
+    companion object {
+        private const val AUTH_SERVER_URL = "http://example.com/"
+    }
 
-class CDKeyGenerateSerializer(serializers.Serializer):
-    duration = serializers.ChoiceField(choices=DURATION_CHOICES)
-    count = serializers.IntegerField(min_value=1, max_value=100)
+    private val cdkeyService: CDKeyService = RetrofitClient.createService(CDKeyService::class.java)
 
-    def save(self, user):
-        cdkeys = []
-        for _ in range(self.validated_data['count']):
-            cdkey = CDKey.generate_cdkey()
-            cdkeys.append(CDKey(cdkey=cdkey, duration=self.validated_data['duration'], user=user))
-        CDKey.objects.bulk_create(cdkeys)
-        return cdkeys
+    fun checkAuthorizationStatus(callback: (Boolean) -> Unit) {
+        AuthCheckTask(callback).execute()
+    }
 
-class CDKeyExtractSerializer(serializers.Serializer):
-    cdkey = serializers.CharField(max_length=64)
+    fun authorizeWithCDKey(cdKey: String, callback: (Boolean, String?) -> Unit) {
+        verifyCDKey(cdKey, callback)
+    }
 
-    def validate_cdkey(self, value):
-        try:
-            cdkey = CDKey.objects.get(cdkey=value)
-        except CDKey.DoesNotExist:
-            raise serializers.ValidationError('Invalid CDKey.')
-        if cdkey.status != CDKey.STATUS_UNUSED:
-            raise serializers.ValidationError('CDKey already used or expired.')
-        return cdkey
+    private fun verifyCDKey(cdkey: String, callback: (Boolean, String?) -> Unit) {
+        val deviceId = getDeviceId()
+        val appVersion = getAppVersion()
 
-    def save(self, user):
-        cdkey = self.validated_data['cdkey'] 
-        cdkey.status = CDKey.STATUS_USED
-        cdkey.extract_time = timezone.now()
-        cdkey.user = user
-        cdkey.save()
-        return cdkey
+        val request = CDKeyVerifyRequest(cdkey, deviceId, appVersion)
+        val call = cdkeyService.verifyCDKey(request)
 
-class CDKeyVerifySerializer(serializers.Serializer):
-    cdkey = serializers.CharField(max_length=64)
-    device_id = serializers.CharField(max_length=255)
-    app_version = serializers.CharField(max_length=20)
-------------------------------------------------------------------------
-# cdkey/views.py
+        call.enqueue(object : Callback<CDKeyVerifyResponse> {
+            override fun onResponse(call: Call<CDKeyVerifyResponse>, response: Response<CDKeyVerifyResponse>) {
+                if (response.isSuccessful) {
+                    val verifyResponse = response.body()
+                    if (verifyResponse != null) {
+                        if (verifyResponse.status == 1) {
+                            // CDKey验证成功
+                            callback(true, verifyResponse.expire_time)
+                        } else {
+                            // CDKey验证失败
+                            callback(false, verifyResponse.error)
+                        }
+                    } else {
+                        callback(false, "Empty response")
+                    }
+                } else {
+                    callback(false, "HTTP error ${response.code()}")
+                }
+            }
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .models import CDKey
-from user.permissions import IsAdmin, IsAgent
-from django.utils import timezone
-from .serializers import CDKeyVerifySerializer
-from django.utils import timezone
-from .serializers import CDKeySerializer, CDKeyGenerateSerializer, CDKeyExtractSerializer, CDKeyVerifySerializer
+            override fun onFailure(call: Call<CDKeyVerifyResponse>, t: Throwable) {
+                callback(false, t.message)
+            }
+        })
+    }
 
-class CDKeyExtractView(APIView):
-    def post(self, request):
-        serializer = CDKeyExtractSerializer(data=request.data)
-        if serializer.is_valid():
-            user = request.user
-            today = timezone.now().date()
+    private fun getDeviceId(): String {
+        // 获取设备ID
+        // ...
+        return "device_id"
+    }
 
-            # 检查每日配额
-            if user.cdkeys.filter(extract_time__date=today).count() >= user.day_quota:
-                return Response({'error': 'Daily quota exceeded.'}, status=status.HTTP_403_FORBIDDEN)
+    private fun getAppVersion(): String {
+        // 获取应用版本号
+        // ...
+        return "app_version"
+    }
 
-            # 检查每月配额
-            if user.quota_updated_at.month != today.month:
-                user.month_quota = user.month_quota_limit
-                user.quota_updated_at = today
-                user.save()
-            if user.cdkeys.filter(extract_time__month=today.month).count() >= user.month_quota:
-                return Response({'error': 'Monthly quota exceeded.'}, status=status.HTTP_403_FORBIDDEN)
+    private inner class AuthCheckTask(private val callback: (Boolean) -> Unit) : AsyncTask<Void, Void, Boolean>() {
+        override fun doInBackground(vararg params: Void?): Boolean {
+            // 检查应用授权状态
+            return checkAuthStatus()
+        }
 
-            cdkey = serializer.save(user=user)
-            return Response(CDKeySerializer(cdkey).data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        override fun onPostExecute(result: Boolean) {
+            callback(result)
+        }
 
-class CDKeyGenerateView(APIView):
-    permission_classes = [IsAdmin | IsAgent]
+        private fun checkAuthStatus(): Boolean {
+            // 检查应用授权状态
+            try {
+                val request = buildAuthCheckRequest()
+                val response = sendAuthCheckRequest(request)
+                return parseAuthCheckResponse(response)
+            } catch (e: IOException) {
+                e.printStackTrace()
+            }
+            return false
+        }
 
-    def post(self, request):
-        serializer = CDKeyGenerateSerializer(data=request.data)
-        if serializer.is_valid():
-            cdkeys = serializer.save(user=request.user)
-            return Response(CDKeySerializer(cdkeys, many=True).data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        private fun buildAuthCheckRequest(): String {
+            // 构建授权检查请求
+            // ...
+            return "auth_check_request"
+        }
 
-class CDKeyExtractView(APIView):
-    def post(self, request):
-        serializer = CDKeyExtractSerializer(data=request.data)  
-        if serializer.is_valid():
-            cdkey = serializer.save(user=request.user)
-            return Response(CDKeySerializer(cdkey).data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        private fun sendAuthCheckRequest(request: String): String {
+            // 发送授权检查请求
+            // ...
+            return "auth_check_response"
+        }
 
-class CDKeyQueryView(APIView):
-    def get(self, request):
-        cdkeys = request.user.cdkeys.all()
-        return Response(CDKeySerializer(cdkeys, many=True).data)
+        private fun parseAuthCheckResponse(response: String): Boolean {
+            // 解析授权检查响应
+            // ...
+            return true
+        }
+    }
+}
 
+interface CDKeyService {
+    @POST("/cdkey/verify/")
+    fun verifyCDKey(
+        @Body request: CDKeyVerifyRequest
+    ): Call<CDKeyVerifyResponse>
+}
 
+data class CDKeyVerifyRequest(
+    val cdkey: String,
+    val device_id: String,
+    val app_version: String
+)
 
-class CDKeyVerifyView(APIView):
-    def post(self, request):
-        serializer = CDKeyVerifySerializer(data=request.data)
-        if serializer.is_valid():
-            cdkey = serializer.validated_data['cdkey']
-            device_id = serializer.validated_data['device_id']
-            app_version = serializer.validated_data['app_version']
+data class CDKeyVerifyResponse(
+    val status: Int,
+    val error: String?,
+    val expire_time: String?
+)
 
-            # TODO: 验证请求签名
+object RetrofitClient {
+    private const val BASE_URL = "http://example.com/"
 
-            try:
-                cdkey = CDKey.objects.get(cdkey=cdkey)
-            except CDKey.DoesNotExist:
-                return Response({'status': 0, 'error': 'Invalid CDKey'}, status=status.HTTP_400_BAD_REQUEST)
+    private val retrofit: Retrofit = Retrofit.Builder()
+        .baseUrl(BASE_URL)
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
 
-            if cdkey.status != 1:
-                return Response({'status': 0, 'error': 'Invalid CDKey'}, status=status.HTTP_400_BAD_REQUEST)
-
-            if cdkey.expire_time < timezone.now():
-                return Response({'status': 0, 'error': 'CDKey expired'}, status=status.HTTP_400_BAD_REQUEST)
-
-            # TODO: 验证device_id和app_version
-
-            # TODO: 记录CDKey使用情况
-
-            return Response({'status': 1, 'expire_time': cdkey.expire_time}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
------------------------------------------------------------------------------------
-# cdkey/models.py
-
-from django.db import models
-from user.models import User
-from .constants import DURATION_CHOICES
-
-class CDKey(models.Model):
-    expire_time = models.DateTimeField()
-    STATUS_CHOICES = (
-        (1, '未使用'),
-        (2, '已使用'),
-        (3, '已过期'),
-    )
-
-    cdkey = models.CharField(max_length=64, unique=True)
-    duration = models.IntegerField(choices=DURATION_CHOICES)
-    create_time = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, related_name='cdkeys')
-    extract_time = models.DateTimeField(null=True, blank=True)
-    status = models.SmallIntegerField(choices=STATUS_CHOICES, default=1)
-
-    class Meta:
-        db_table = 'cdkey'
-
-
-
+    fun <T> createService(serviceClass: Class<T>): T {
+        return retrofit.create(serviceClass)
+    }
+}

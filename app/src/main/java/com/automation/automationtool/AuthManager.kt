@@ -1,115 +1,90 @@
+package com.automation.automationtool
+
 import android.content.Context
-import android.os.AsyncTask
-import retrofit2.Call
-import retrofit2.Callback
-import retrofit2.Response
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.Body
-import retrofit2.http.POST
+import android.util.Log
+import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
+import io.ktor.client.*
+import io.ktor.client.engine.android.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.*
+
+data class CDKeyResponse(
+    val id: Int,
+    val key: String,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("expires_at") val expiresAt: String,
+    @SerializedName("created_by") val createdBy: Int,
+    @SerializedName("used_by") val usedBy: String?,
+    @SerializedName("used_at") val usedAt: String?,
+    @SerializedName("validity_days") val validityDays: Int,
+    @SerializedName("is_used_field") val isUsedField: Boolean
+)
 
 class AuthManager(private val context: Context) {
+    private val client = HttpClient(Android)
+    private val baseUrl = "http://192.168.3.87:8200"
+    private val gson = Gson()
 
-    companion object {
-        private const val AUTH_SERVER_URL = "http://192.168.3.87:8200/"
-    }
+    private suspend fun verifyCDKey(cdKey: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            Log.d("AuthManager", "Verifying CDKey: $cdKey")
+            val response: HttpResponse = client.get("$baseUrl/cdkey") {
+                parameter("cd_key", cdKey)
+            }
 
-    private val cdkeyService: CDKeyService = RetrofitClient.createService(CDKeyService::class.java)
+            if (!response.status.isSuccess()) {
+                Log.e("AuthManager", "Error response from server: ${response.status}")
+                return@withContext false
+            }
 
-    fun checkCDKeyValidity(callback: (Boolean, String?) -> Unit) {
-        val cdkey = getCDKeyFromPreferences()
-        if (cdkey.isNullOrEmpty()) {
-            callback(false, null)
-        } else {
-            verifyCDKey(cdkey, callback)
+            val responseString: String = response.bodyAsText()
+            Log.d("AuthManager", "Received response: $responseString")
+
+            val cdKeyResponse = gson.fromJson(responseString, CDKeyResponse::class.java)
+            !cdKeyResponse.isUsedField
+        } catch (e: Exception) {
+            Log.e("AuthManager", "Error while verifying CDKey", e)
+            false
         }
     }
 
-    fun saveCDKeyToPreferences(cdkey: String) {
-        // 将CDKey保存到SharedPreferences
-        // ...
+    fun checkAuthorizationStatus(callback: (Boolean) -> Unit) {
+        val cdKey = getCDKeyFromPreferences()
+        callback(cdKey != null)
     }
 
-    private fun getCDKeyFromPreferences(): String? {
-        // 从SharedPreferences获取CDKey
-        // ...
-        return null
+    suspend fun authorizeCDKey(cdKey: String, callback: (Boolean) -> Unit) {
+        val isValid = verifyCDKey(cdKey)
+        if (isValid) {
+            saveCDKeyToPreferences(cdKey)
+        }
+        withContext(Dispatchers.Main) {
+            callback(isValid)
+        }
     }
 
-    private fun verifyCDKey(cdkey: String, callback: (Boolean, String?) -> Unit) {
-        val deviceId = getDeviceId()
-        val appVersion = getAppVersion()
-
-        val request = CDKeyVerifyRequest(cdkey, deviceId, appVersion)
-        val call = cdkeyService.verifyCDKey(request)
-
-        call.enqueue(object : Callback<CDKeyVerifyResponse> {
-            override fun onResponse(call: Call<CDKeyVerifyResponse>, response: Response<CDKeyVerifyResponse>) {
-                if (response.isSuccessful) {
-                    val verifyResponse = response.body()
-                    if (verifyResponse != null) {
-                        if (verifyResponse.status == 1) {
-                            // CDKey验证成功
-                            callback(true, verifyResponse.expire_time)
-                        } else {
-                            // CDKey验证失败
-                            callback(false, verifyResponse.error)
-                        }
-                    } else {
-                        callback(false, "Empty response")
-                    }
-                } else {
-                    callback(false, "HTTP error ${response.code()}")
-                }
-            }
-
-            override fun onFailure(call: Call<CDKeyVerifyResponse>, t: Throwable) {
-                callback(false, t.message)
-            }
-        })
+    internal fun getCDKeyFromPreferences(): String? {
+        val sharedPreferences = context.getSharedPreferences("auth_prefs", Context.MODE_PRIVATE)
+        return sharedPreferences.getString("cd_key", null)
     }
 
-    private fun getDeviceId(): String {
-        // 获取设备ID
-        // ...
-        return "device_id"
+    private fun saveCDKeyToPreferences(cdKey: String) {
+        val sharedPreferences = context.getSharedPreferences("auth_prefs", Context.MODE_PRIVATE)
+        sharedPreferences.edit().putString("cd_key", cdKey).apply()
     }
 
-    private fun getAppVersion(): String {
-        // 获取应用版本号
-        // ...
-        return "app_version"
-    }
-}
-
-interface CDKeyService {
-    @POST("/cdkey/verify/")
-    fun verifyCDKey(
-        @Body request: CDKeyVerifyRequest
-    ): Call<CDKeyVerifyResponse>
-}
-
-data class CDKeyVerifyRequest(
-    val cdkey: String,
-    val device_id: String,
-    val app_version: String
-)
-
-data class CDKeyVerifyResponse(
-    val status: Int,
-    val error: String?,
-    val expire_time: String?
-)
-
-object RetrofitClient {
-    private const val BASE_URL = "http://192.168.3.87:8200/"
-
-    private val retrofit: Retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
-
-    fun <T> createService(serviceClass: Class<T>): T {
-        return retrofit.create(serviceClass)
+    private fun parseDate(dateString: String): Date? {
+        return try {
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", Locale.getDefault()).parse(dateString)
+        } catch (e: Exception) {
+            Log.e("AuthManager", "Error parsing date", e)
+            null
+        }
     }
 }
